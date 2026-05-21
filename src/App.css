@@ -1,0 +1,15 @@
+body {
+  margin: 0;
+  font-family: sans-serif;
+  background: #0f172a;
+  color: white;
+}
+
+#center {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
