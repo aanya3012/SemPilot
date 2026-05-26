@@ -3,7 +3,9 @@
  * Import everything from here: import { computeFeasibility } from '@/engine'
  */
 
-export * from './cgpa/calculateCGPA.js';
-export * from './cgpa/predictRequiredSGPA.js';
-export * from './cgpa/feasibilityEngine.js';
-export * from './cgpa/backlogRecoveryEngine.js';
+export * from './calculateCGPA.js';
+export * from './predictRequiredSGPA.js';
+export * from './feasibilityEngine.js';
+export * from './backlogRecoveryEngine.js';
+export * from './improvementReattemptEngine.js';
+export * from './academicRecoveryPlanner.js';

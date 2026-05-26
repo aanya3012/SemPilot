@@ -13,10 +13,13 @@
  * - NaN / bad inputs
  */
 
-import { calculateCGPA, calculateBestPossibleCGPA }            from './calculateCGPA.js';
+import process                                                 from 'node:process';
+import { calculateCGPA }                                       from './calculateCGPA.js';
 import { predictRequiredSGPA, projectCGPATrend }               from './predictRequiredSGPA.js';
 import { computeFeasibility }                                   from './feasibilityEngine.js';
 import { analyzeBacklogs, generateRecoveryRoadmap }            from './backlogRecoveryEngine.js';
+import { analyzeImprovementReattempts }                         from './improvementReattemptEngine.js';
+import { planAcademicRecovery }                                  from './academicRecoveryPlanner.js';
 
 // ─── tiny test harness ──────────────────────────────────────────────────────
 let passed = 0;
@@ -328,6 +331,267 @@ test('backlog overload scenario flags as high/critical damage', () => {
     remainingCredits:    80,
   });
   expect(['high', 'critical']).toContain(result.damageLevel);
+});
+
+console.log('\n-- analyzeImprovementReattempts --');
+
+const clearedLowGradeSubjects = [
+  { id: 's1', name: 'Mathematics II', credits: 4, currentGradePoint: 5 },
+  { id: 's2', name: 'Basic Electronics', credits: 3, currentGradePoint: 6 },
+  { id: 's3', name: 'Engineering Chemistry', credits: 4, currentGradePoint: 6 },
+  { id: 's4', name: 'Workshop', credits: 2, currentGradePoint: 7 },
+  { id: 's5', name: 'Data Structures', credits: 4, currentGradePoint: 8 },
+];
+
+test('improvement engine calculates credit-point deficit toward target CGPA', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:                   clearedLowGradeSubjects,
+    currentCreditPoints:        820,
+    currentTotalCredits:        100,
+    targetCGPA:                 8.5,
+    expectedImprovedGradePoint: 8,
+  });
+
+  expect(result.creditPointDeficit).toBe(30);
+});
+
+test('improvement engine calculates strategic priority scores', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:                   clearedLowGradeSubjects,
+    currentCreditPoints:        820,
+    currentTotalCredits:        100,
+    targetCGPA:                 8.5,
+    expectedImprovedGradePoint: 8,
+  });
+
+  expect(result.candidates[0].recoveryPriorityScore).toBeGreaterThan(0);
+  expect(result.candidates[0].cgpaGainPotential).toBeGreaterThan(0);
+  expect(result.candidates[0].improvementEfficiency).toBeGreaterThan(0);
+  expect(result.candidates[0].creditPointGain).toBeGreaterThan(result.candidates[3].creditPointGain);
+});
+
+test('improvement engine marks impossible when eligible gains cannot close gap', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:                   clearedLowGradeSubjects,
+    currentCreditPoints:        820,
+    currentTotalCredits:        100,
+    targetCGPA:                 8.5,
+    expectedImprovedGradePoint: 8,
+  });
+
+  expect(result.minimumReattemptsNeeded).toBe(Infinity);
+  expect(result.achievableWithImprovements).toBeFalsy();
+});
+
+test('improvement engine returns selected minimum plan when gap can close', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:                   clearedLowGradeSubjects,
+    currentCreditPoints:        829,
+    currentTotalCredits:        100,
+    targetCGPA:                 8.5,
+    expectedImprovedGradePoint: 8,
+  });
+
+  expect(result.minimumReattemptsNeeded).toBe(3);
+  expect(result.selectedReattempts.length).toBe(3);
+  expect(result.recoveredCreditPoints).toBe(26);
+  expect(result.projectedCGPAAfterImprovements).toBeCloseTo(8.55, 2);
+});
+
+test('improvement engine returns structured strategic recommendation output', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:                   clearedLowGradeSubjects,
+    currentCreditPoints:        829,
+    currentTotalCredits:        100,
+    targetCGPA:                 8.5,
+    expectedImprovedGradePoint: 8,
+  });
+
+  expect(Array.isArray(result.recommendedReattempts)).toBeTruthy();
+  expect(Array.isArray(result.topRecoverySubjects)).toBeTruthy();
+  expect(result.feasibilityBefore.projectedFinalCGPA).toBe(8.29);
+  expect(result.feasibilityAfter.projectedFinalCGPA).toBeCloseTo(8.55, 2);
+  expect(result.projectedCGPAGain).toBeCloseTo(0.26, 2);
+  expect(typeof result.strategicSummary).toBe('string');
+});
+
+test('improvement engine dynamically raises target grade for high CGPA targets', () => {
+  const moderate = analyzeImprovementReattempts({
+    subjects:              clearedLowGradeSubjects,
+    currentCreditPoints:   760,
+    currentTotalCredits:   100,
+    targetCGPA:            7.8,
+  });
+  const aggressive = analyzeImprovementReattempts({
+    subjects:              clearedLowGradeSubjects,
+    currentCreditPoints:   760,
+    currentTotalCredits:   100,
+    targetCGPA:            8.7,
+  });
+
+  expect(moderate.recommendedTargetGrade).toBeLessThan(aggressive.recommendedTargetGrade);
+  expect(aggressive.recommendedTargetGrade).toBeGreaterThan(8);
+});
+
+test('improvement engine handles impossible recovery', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:              clearedLowGradeSubjects,
+    currentCreditPoints:   650,
+    currentTotalCredits:   100,
+    targetCGPA:            9.5,
+  });
+
+  expect(result.achievableWithImprovements).toBeFalsy();
+  expect(result.minimumReattemptsNeeded).toBe(Infinity);
+  expect(result.pressureLevel).toBe('extreme');
+});
+
+test('improvement engine handles low-credit edge cases', () => {
+  const result = analyzeImprovementReattempts({
+    subjects: [
+      { id: 'lab1', name: 'Mini Project Lab', credits: 1, currentGradePoint: 5, difficulty: 1 },
+      { id: 'lab2', name: 'Workshop Lab', credits: 1, currentGradePoint: 6, difficulty: 1 },
+    ],
+    currentCreditPoints:   698,
+    currentTotalCredits:   100,
+    targetCGPA:            7,
+  });
+
+  expect(result.minimumReattemptsNeeded).toBe(2);
+  expect(result.topRecoverySubjects[0].subject.credits).toBe(1);
+  expect(result.feasibilityAfter.isTargetMet).toBeTruthy();
+});
+
+test('improvement engine handles insufficient subjects', () => {
+  const result = analyzeImprovementReattempts({
+    subjects: [
+      { id: 'only', name: 'Small Elective', credits: 1, currentGradePoint: 7 },
+    ],
+    currentCreditPoints:   700,
+    currentTotalCredits:   100,
+    targetCGPA:            8,
+  });
+
+  expect(result.achievableWithImprovements).toBeFalsy();
+  expect(result.remainingDeficit).toBeGreaterThan(0);
+});
+
+test('improvement engine handles already-achieved targets', () => {
+  const result = analyzeImprovementReattempts({
+    subjects:              clearedLowGradeSubjects,
+    currentCreditPoints:   860,
+    currentTotalCredits:   100,
+    targetCGPA:            8.5,
+  });
+
+  expect(result.minimumReattemptsNeeded).toBe(0);
+  expect(result.recommendedReattempts.length).toBe(0);
+  expect(result.feasibilityBefore.isTargetMet).toBeTruthy();
+  expect(result.pressureLevel).toBe('low');
+});
+
+console.log('\n-- planAcademicRecovery --');
+
+const improvementPool = [
+  { id: 'i1', name: 'Physics', credits: 4, currentGradePoint: 5, difficulty: 2 },
+  { id: 'i2', name: 'Chemistry', credits: 4, currentGradePoint: 6, difficulty: 2 },
+  { id: 'i3', name: 'DSA', credits: 3, currentGradePoint: 6, difficulty: 3 },
+  { id: 'i4', name: 'Workshop', credits: 2, currentGradePoint: 7, difficulty: 1 },
+];
+
+test('recovery planner handles target achievable without reattempts', () => {
+  const plan = planAcademicRecovery({
+    currentCGPA:          8.3,
+    currentTotalCredits:  100,
+    remainingCredits:     100,
+    targetCGPA:           8.4,
+    improvementSubjects:  improvementPool,
+  });
+
+  expect(plan.targetAchievable).toBeTruthy();
+  expect(plan.improvementStrategy.required).toBeFalsy();
+  expect(plan.recoveryMode).toBe('stable');
+  expect(plan.futureSemesterPlan.isStrategicallyEnough).toBeTruthy();
+});
+
+test('recovery planner recommends strategic reattempts when future-only plan is too hard', () => {
+  const plan = planAcademicRecovery({
+    currentCGPA:          7.6,
+    currentTotalCredits:  100,
+    remainingCredits:     100,
+    targetCGPA:           8.0,
+    improvementSubjects:  improvementPool,
+    sustainableSGPA:      8.2,
+  });
+
+  expect(plan.futureSemesterPlan.isStrategicallyEnough).toBeFalsy();
+  expect(plan.improvementStrategy.required).toBeTruthy();
+  expect(plan.improvementStrategy.recommendedSubjects.length).toBeGreaterThan(0);
+  expect(plan.projectedFinalCGPA).toBeGreaterThan(plan.futureSemesterPlan.projectedFinalCGPA);
+  expect(['recovery', 'aggressive']).toContain(plan.recoveryMode);
+});
+
+test('recovery planner handles impossible recovery', () => {
+  const plan = planAcademicRecovery({
+    currentCGPA:          6.0,
+    currentTotalCredits:  150,
+    remainingCredits:     20,
+    targetCGPA:           9.2,
+    improvementSubjects:  improvementPool,
+  });
+
+  expect(plan.targetAchievable).toBeFalsy();
+  expect(plan.recoveryMode).toBe('mathematically unstable');
+  expect(plan.recoveryPressure).toBe('extreme');
+});
+
+test('recovery planner separates backlog-heavy recovery impact', () => {
+  const plan = planAcademicRecovery({
+    currentCGPA:          7.2,
+    currentTotalCredits:  100,
+    remainingCredits:     80,
+    targetCGPA:           8.0,
+    backlogs: [
+      { id: 'b1', name: 'Signals', credits: 4, currentGradePoint: 0, expectedGradePoint: 6 },
+      { id: 'b2', name: 'Maths', credits: 4, currentGradePoint: 0, expectedGradePoint: 6 },
+      { id: 'b3', name: 'Mechanics', credits: 3, currentGradePoint: 0, expectedGradePoint: 6 },
+    ],
+    improvementSubjects:  improvementPool,
+    sustainableSGPA:      8.0,
+  });
+
+  expect(plan.backlogRecovery.remainingBacklogs).toBe(3);
+  expect(plan.backlogRecovery.projectedGain).toBeGreaterThan(0);
+  expect(plan.engineResults.backlogAnalysis.prioritized.length).toBe(3);
+});
+
+test('recovery planner handles low remaining credit scenarios', () => {
+  const plan = planAcademicRecovery({
+    currentCGPA:          7.0,
+    currentTotalCredits:  150,
+    remainingCredits:     10,
+    targetCGPA:           8.0,
+    improvementSubjects:  improvementPool,
+  });
+
+  expect(plan.futureSemesterPlan.isMathematicallyEnough).toBeFalsy();
+  expect(plan.recoveryMode).toBe('mathematically unstable');
+  expect(plan.creditPointDeficitAfterFutureAndBacklogs).toBeGreaterThan(0);
+});
+
+test('recovery planner handles already-achieved targets', () => {
+  const plan = planAcademicRecovery({
+    currentCGPA:          8.8,
+    currentTotalCredits:  100,
+    remainingCredits:     50,
+    targetCGPA:           8.5,
+    improvementSubjects:  improvementPool,
+  });
+
+  expect(plan.targetAchievable).toBeTruthy();
+  expect(plan.requiredSGPA).toBe(0);
+  expect(plan.recoveryMode).toBe('stable');
+  expect(plan.improvementStrategy.required).toBeFalsy();
 });
 
 // ─── projectCGPATrend ───────────────────────────────────────────────────────
